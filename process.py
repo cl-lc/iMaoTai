@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import datetime
 import json
 import math
@@ -18,13 +20,28 @@ SALT = '2af72f100c356273d46284f6fd1dfc08'
 
 # 这里用的高德api,需要自己去高德开发者平台申请自己的key
 AMAP_KEY = os.environ.get("GAODE_KEY")
-# 增加校验高德api是否配置
-# if AMAP_KEY is None:
-    # logging.error("请自行配置高德地图的MapKey")
-    # raise ValueError
 
 CURRENT_TIME = str(int(time.time() * 1000))
 headers = {}
+
+
+# 消息推送
+def send_msg(title, content):
+    if config.PUSH_TOKEN is None:
+        return
+    url = 'http://www.pushplus.plus/send'
+    r = requests.get(url, params={'token': config.PUSH_TOKEN,
+                                  'title': title,
+                                  'content': content})
+    logging.info(f'通知推送结果：{r.status_code, r.text}')
+
+
+def send_succeed_msg(content):
+    send_msg(f'预约成功', content)
+
+
+def send_failed_msg(content):
+    send_msg(f'预约失败', content)
 
 
 # 获取茅台APP的版本号，暂时没找到接口，采用爬虫曲线救国
@@ -40,6 +57,14 @@ def get_mt_version():
     elements = soup.find_all(class_="whats-new__latest__version")
     # 获取p标签内的文本内容
     version_text = elements[0].text
+
+    # 尝试优先用空格分离
+    terms = version_text.split(' ')
+    if len(terms) == 2:
+        return terms[1]
+    else:
+        logging.info(f'APP版本号：{version_text}')
+        send_failed_msg(f'获取App版本号失败')
     # 这里先把没有直接替换“版本 ”，因为后面不知道空格会不会在，所以先替换文字，再去掉前后空格
     latest_mt_version = version_text.replace("版本", "").strip()
     return latest_mt_version
@@ -245,33 +270,22 @@ def act_params(shop_id: str, item_id: str):
     return params
 
 
-# 消息推送
-def send_msg(title, content):
-    if config.PUSH_TOKEN is None:
-        return
-    url = 'http://www.pushplus.plus/send'
-    r = requests.get(url, params={'token': config.PUSH_TOKEN,
-                                  'title': title,
-                                  'content': content})
-    logging.info(f'通知推送结果：{r.status_code, r.text}')
-
-
 # 核心代码，执行预约
-def reservation(params: dict, mobile: str):
+def reservation(params: dict, mobile: str, item: str):
     params.pop('userId')
-    responses = requests.post("https://app.moutai519.com.cn/xhr/front/mall/reservation/add", json=params,
-                              headers=headers)
-    # if responses.status_code == 401:
-    #     send_msg('！！失败！！茅台预约', f'[{mobile}],登录token失效，需要重新登录')
-    #     raise RuntimeError
-    if responses.status_code == 200:
-        r_success = True
-    else:
-        r_success = False
-
+    responses = requests.post("https://app.moutai519.com.cn/xhr/front/mall/reservation/add", json=params, headers=headers)
     msg = f'预约:{mobile};Code:{responses.status_code};Body:{responses.text};'
     logging.info(msg)
-    return r_success, msg
+    if responses.status_code == 200:
+        if '申购完成' in responses.text:
+            send_succeed_msg(f'[{mobile}][{item}] 申购成功')
+            return True
+        else:
+            send_failed_msg(f'[{mobile}][{item}] 申购失败：{responses.text}')
+            return False
+    else:
+        send_failed_msg(f'[{mobile}][{item}] 申购失败：{responses.text}')
+        return False
 
 
 # 用高德api获取地图信息
